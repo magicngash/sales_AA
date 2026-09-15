@@ -1,0 +1,6 @@
+{
+  "name": "Sales Sheets AI & Inventory Intelligence",
+  "description": "Answer sales questions, generate automated summary reports, and uncover actionable inventory management insights directly from Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
