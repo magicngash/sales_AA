@@ -188,7 +188,7 @@ export default function App() {
     setAiActionItems([]);
   };
 
-  // Send Question to Gemini AI
+  // Send Question to DeepSeek AI
   const handleSendMessage = async (question: string) => {
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -201,7 +201,7 @@ export default function App() {
     setIsChatLoading(true);
 
     try {
-      const response = await fetch('/api/gemini/ask-sales', {
+      const response = await fetch('/api/deepseek/ask-sales', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -229,7 +229,7 @@ export default function App() {
       const errorMsg: ChatMessage = {
         id: `err-${Date.now()}`,
         sender: 'assistant',
-        text: `⚠️ Error processing sales analysis: ${err?.message || 'Could not connect to Gemini service.'}`,
+        text: `⚠️ Error processing sales analysis: ${err?.message || 'Could not connect to DeepSeek service.'}`,
         timestamp: new Date().toISOString(),
         isError: true,
       };
@@ -239,12 +239,12 @@ export default function App() {
     }
   };
 
-  // Generate Automated Summary Report with Gemini
+  // Generate Automated Summary Report with DeepSeek
   const handleGenerateReport = async (scope: string) => {
     setIsGeneratingReport(true);
     setReportError(null);
     try {
-      const response = await fetch('/api/gemini/generate-report', {
+      const response = await fetch('/api/deepseek/generate-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -306,7 +306,7 @@ export default function App() {
   const handleRefreshInventoryInsights = async () => {
     setIsRefreshingInsights(true);
     try {
-      const response = await fetch('/api/gemini/inventory-insights', {
+      const response = await fetch('/api/deepseek/inventory-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

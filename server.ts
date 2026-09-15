@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -14,22 +13,8 @@ const PORT = 3000;
 
 app.use(express.json({ limit: "15mb" }));
 
-// Lazy initializer for Gemini SDK
-let aiClient: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
-  if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is required");
-    }
-    aiClient = new GoogleGenAI({ apiKey: key });
-  }
-  return aiClient;
-}
-
-// Resilient Gemini content generation with exponential backoff and automatic model failover
-const PRIMARY_MODEL = "gemini-3.8-flash";
-const FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-latest"];
+const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 
 function isTransientDemandError(error: any): boolean {
   if (!error) return false;
@@ -53,7 +38,7 @@ function isTransientDemandError(error: any): boolean {
 }
 
 function cleanErrorMessage(error: any): string {
-  if (!error) return "An unexpected error occurred while communicating with Gemini.";
+  if (!error) return "An unexpected error occurred while communicating with DeepSeek.";
   const raw = error.message || String(error);
   try {
     const jsonMatch = raw.match(/\{[\s\S]*"message"\s*:\s*"([^"]+)"[\s\S]*\}/);
@@ -66,42 +51,53 @@ function cleanErrorMessage(error: any): string {
   return raw;
 }
 
-async function generateContentWithResilience(
-  ai: GoogleGenAI,
-  options: {
-    contents: any;
-    config?: any;
+async function generateContentWithResilience(options: {
+  prompt: string;
+  systemInstruction: string;
+  temperature?: number;
+  jsonMode?: boolean;
+}) {
+  const key = process.env.DEEPSEEK_API_KEY;
+  if (!key) {
+    throw new Error("DEEPSEEK_API_KEY environment variable is required");
   }
-) {
-  const models = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+
   let lastError: any = null;
 
-  for (const model of models) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: options.contents,
-          config: options.config,
-        });
-        return response;
-      } catch (err: any) {
-        lastError = err;
-        const transient = isTransientDemandError(err);
-        console.warn(`[Gemini] Model ${model} (attempt ${attempt}/2) failed:`, err?.message || err);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model: DEEPSEEK_MODEL,
+          messages: [
+            { role: "system", content: options.systemInstruction },
+            { role: "user", content: options.prompt },
+          ],
+          temperature: options.temperature ?? 0.2,
+          ...(options.jsonMode ? { response_format: { type: "json_object" } } : {}),
+        }),
+      });
 
-        if (!transient) {
-          // If the error is fatal / not transient (e.g. invalid arguments), fail immediately
-          throw err;
-        }
-
-        if (attempt < 2) {
-          const delay = attempt * 1000 + Math.floor(Math.random() * 400);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+      const payload = await response.json();
+      if (!response.ok) {
+        const error = new Error(payload?.error?.message || `DeepSeek request failed (${response.status})`);
+        Object.assign(error, { status: response.status });
+        throw error;
       }
+
+      return payload.choices?.[0]?.message?.content || "";
+    } catch (err: any) {
+      lastError = err;
+      const transient = isTransientDemandError(err);
+      console.warn(`[DeepSeek] Attempt ${attempt}/2 failed:`, err?.message || err);
+      if (!transient || attempt === 2) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 1000 + Math.floor(Math.random() * 400)));
     }
-    console.warn(`[Gemini] Model ${model} unavailable or under high demand. Attempting fallback model...`);
   }
 
   throw lastError;
@@ -113,14 +109,13 @@ app.get("/api/health", (req, res) => {
 });
 
 // Q&A endpoint for sales and inventory questions
-app.post("/api/gemini/ask-sales", async (req, res) => {
+app.post("/api/deepseek/ask-sales", async (req, res) => {
   try {
     const { question, datasetSummary, sampleRows, inventoryStatus } = req.body;
     if (!question) {
       return res.status(400).json({ error: "Question is required" });
     }
 
-    const ai = getAI();
     const systemInstruction = `You are an elite Sales Analytics & Inventory Intelligence Specialist.
 Your job is to answer questions about sales recorded in Google Sheets and explain their impact on inventory management with extreme precision.
 
@@ -145,12 +140,10 @@ ${JSON.stringify(sampleRows, null, 2)}
 
 Please provide a comprehensive, accurate, and actionable answer.`;
 
-    const response = await generateContentWithResilience(ai, {
-      contents: prompt,
-      config: {
-        systemInstruction,
-        temperature: 0.2,
-      },
+    const response = await generateContentWithResilience({
+      prompt,
+      systemInstruction,
+      temperature: 0.2,
     });
 
     res.json({ answer: response.text || "No response generated." });
@@ -162,11 +155,10 @@ Please provide a comprehensive, accurate, and actionable answer.`;
 });
 
 // Automated Summary Report generation
-app.post("/api/gemini/generate-report", async (req, res) => {
+app.post("/api/deepseek/generate-report", async (req, res) => {
   try {
     const { datasetSummary, topPerformers, categoryBreakdown, inventoryRisks, reportScope } = req.body;
 
-    const ai = getAI();
     const systemInstruction = `You are a Chief Operations & Revenue Officer specializing in retail, e-commerce, and wholesale supply chain intelligence.
 Generate a structured, professional Executive Sales & Inventory Management Report.
 
@@ -207,12 +199,10 @@ Inventory Health & Stockout Alerts:
 ${JSON.stringify(inventoryRisks, null, 2)}
 `;
 
-    const response = await generateContentWithResilience(ai, {
-      contents: prompt,
-      config: {
-        systemInstruction,
-        temperature: 0.3,
-      },
+    const response = await generateContentWithResilience({
+      prompt,
+      systemInstruction,
+      temperature: 0.3,
     });
 
     res.json({
@@ -227,11 +217,10 @@ ${JSON.stringify(inventoryRisks, null, 2)}
 });
 
 // Actionable Inventory Insights generation (Structured JSON)
-app.post("/api/gemini/inventory-insights", async (req, res) => {
+app.post("/api/deepseek/inventory-insights", async (req, res) => {
   try {
     const { inventoryData, salesTrends } = req.body;
 
-    const ai = getAI();
     const systemInstruction = `You are an AI supply chain planner.
 Analyze the provided product sales trends and stock levels to generate prioritized, highly actionable inventory recommendations.
 
@@ -272,16 +261,14 @@ Recent Sales Velocities:
 ${JSON.stringify(salesTrends, null, 2)}
 `;
 
-    const response = await generateContentWithResilience(ai, {
-      contents: prompt,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        temperature: 0.1,
-      },
+    const response = await generateContentWithResilience({
+      prompt,
+      systemInstruction,
+      temperature: 0.1,
+      jsonMode: true,
     });
 
-    let rawText = response.text || "{}";
+    let rawText = response || "{}";
     // Strip markdown code fences if present
     rawText = rawText.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
     const parsed = JSON.parse(rawText || "{}");
