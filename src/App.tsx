@@ -42,6 +42,7 @@ export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Active view
   const [activeTab, setActiveTab] = useState<'dashboard' | 'qa' | 'reports' | 'inventory' | 'table'>('dashboard');
@@ -104,11 +105,23 @@ export default function App() {
   const handleLogin = async () => {
     try {
       setIsLoggingIn(true);
+      setAuthError(null);
       const res = await googleSignIn();
       setUser(res.user);
       setAccessToken(res.accessToken);
     } catch (err: any) {
       console.error('Sign in failed:', err);
+      const code = err?.code || 'unknown';
+      const message = err?.message || 'Google sign-in failed.';
+      const guidance =
+        code === 'auth/unauthorized-domain'
+          ? 'Add this site\'s hostname to Firebase Console → Authentication → Settings → Authorized domains.'
+          : code === 'auth/popup-blocked'
+            ? 'Allow pop-ups for this site and try again.'
+            : code === 'auth/popup-closed-by-user'
+              ? 'The Google sign-in window was closed before sign-in completed.'
+              : `${message} (Firebase code: ${code})`;
+      setAuthError(guidance);
     } finally {
       setIsLoggingIn(false);
     }
@@ -368,6 +381,23 @@ export default function App() {
         isCreatingDemo={isCreatingDemo}
         criticalAlertsCount={criticalAlertsCount}
       />
+
+      {authError && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div role="alert" className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start justify-between gap-4 shadow-2xs">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </div>
+            <button
+              onClick={() => setAuthError(null)}
+              className="text-rose-600 hover:text-rose-800 font-semibold shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
